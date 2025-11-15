@@ -2,10 +2,11 @@ import { type Context } from 'hono';
 import { ApplicationService } from './application.service.ts';
 
 export class ApplicationController {
-  // Apply for a job
+
+  // Apply for a job (with optional resume)
   static async applyForJob(c: Context) {
     try {
-      const { jobId } = await c.req.json();
+      const { jobId, resumeData } = await c.req.json();
       const user = c.get('user');
 
       if (user.userType !== 'employee') {
@@ -22,7 +23,11 @@ export class ApplicationController {
         }, 400);
       }
 
-      const application = await ApplicationService.applyForJob(jobId, user.userId);
+      const application = await ApplicationService.applyForJob(
+        jobId, 
+        user.userId, 
+        resumeData // may be undefined
+      );
 
       return c.json({
         success: true,
@@ -32,14 +37,14 @@ export class ApplicationController {
 
     } catch (error: any) {
       console.error('Apply for job error:', error);
-      
+
       if (error.message.includes('already applied')) {
         return c.json({ 
           success: false,
           error: error.message 
         }, 409);
       }
-      
+
       return c.json({ 
         success: false,
         error: 'Failed to apply for job' 
@@ -47,7 +52,7 @@ export class ApplicationController {
     }
   }
 
-  // Get employee's applications
+  // Get employee applications + stats
   static async getEmployeeApplications(c: Context) {
     try {
       const user = c.get('user');
@@ -64,10 +69,7 @@ export class ApplicationController {
 
       return c.json({
         success: true,
-        data: {
-          applications,
-          stats
-        }
+        data: { applications, stats }
       });
 
     } catch (error: any) {
@@ -79,7 +81,7 @@ export class ApplicationController {
     }
   }
 
-  // Get applications for employer
+  // Get employer applications
   static async getEmployerApplications(c: Context) {
     try {
       const user = c.get('user');

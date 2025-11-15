@@ -11,6 +11,9 @@ export interface Application {
   job_title?: string;
   employer_name?: string;
   employee_name?: string;
+  resume_filename?: string;
+  resume_url?: string;
+  file_size?: number;
 }
 
 export interface ApplicationStats {
@@ -23,36 +26,61 @@ export interface ApplicationStats {
 }
 
 export class ApplicationService {
-  // Apply for a job
-  static async applyForJob(jobId: number, employeeId: number): Promise<Application> {
+
+  // Apply for a job with optional resume upload
+  static async applyForJob(
+    jobId: number,
+    employeeId: number,
+    resumeData?: { filename: string; originalName: string; size: number }
+  ): Promise<Application> {
     const pool = getDbPool();
-    
+
     // Check if already applied
     const existing = await pool.request()
       .input('job_id', sql.Int, jobId)
       .input('employee_id', sql.Int, employeeId)
       .query('SELECT id FROM Applications WHERE job_id = @job_id AND employee_id = @employee_id');
-    
+
     if (existing.recordset.length > 0) {
       throw new Error('You have already applied for this job');
     }
-    
-    const result = await pool.request()
+
+    let query = '';
+    let request = pool.request()
       .input('job_id', sql.Int, jobId)
-      .input('employee_id', sql.Int, employeeId)
-      .query(`
+      .input('employee_id', sql.Int, employeeId);
+
+    // If resume uploaded
+    if (resumeData) {
+      query = `
+        INSERT INTO Applications (job_id, employee_id, resume_filename, resume_url, file_size) 
+        OUTPUT INSERTED.*
+        VALUES (@job_id, @employee_id, @resume_filename, @resume_url, @file_size)
+      `;
+
+      // ✅ FIX: Use the RANDOM filename for BOTH fields
+      request = request
+        .input('resume_filename', sql.NVarChar, resumeData.filename) // Store random filename
+        .input('resume_url', sql.NVarChar, `/uploads/resumes/${resumeData.filename}`) // Use same random filename
+        .input('file_size', sql.Int, resumeData.size);
+    } 
+    // If no resume
+    else {
+      query = `
         INSERT INTO Applications (job_id, employee_id) 
         OUTPUT INSERTED.*
         VALUES (@job_id, @employee_id)
-      `);
-    
+      `;
+    }
+
+    const result = await request.query(query);
     return result.recordset[0] as Application;
   }
 
   // Get applications by employee
   static async getApplicationsByEmployee(employeeId: number): Promise<Application[]> {
     const pool = getDbPool();
-    
+
     const result = await pool.request()
       .input('employee_id', sql.Int, employeeId)
       .query(`
@@ -63,14 +91,14 @@ export class ApplicationService {
         WHERE a.employee_id = @employee_id
         ORDER BY a.applied_at DESC
       `);
-    
+
     return result.recordset as Application[];
   }
 
   // Get applications for employer's jobs
   static async getApplicationsForEmployer(employerId: number): Promise<Application[]> {
     const pool = getDbPool();
-    
+
     const result = await pool.request()
       .input('employer_id', sql.Int, employerId)
       .query(`
@@ -81,20 +109,21 @@ export class ApplicationService {
         WHERE j.employer_id = @employer_id
         ORDER BY a.applied_at DESC
       `);
-    
+
     return result.recordset as Application[];
   }
 
   // Update application status
   static async updateApplicationStatus(
-    applicationId: number, 
+    applicationId: number,
     status: Application['status'],
     updaterId: number,
     updaterType: 'employer' | 'employee'
   ): Promise<boolean> {
     const pool = getDbPool();
-    
+
     let query = '';
+
     if (updaterType === 'employer') {
       query = `
         UPDATE Applications 
@@ -110,20 +139,20 @@ export class ApplicationService {
         WHERE id = @application_id AND employee_id = @updater_id
       `;
     }
-    
+
     const result = await pool.request()
       .input('application_id', sql.Int, applicationId)
       .input('status', sql.NVarChar, status)
       .input('updater_id', sql.Int, updaterId)
       .query(query);
-    
+
     return result.rowsAffected[0] > 0;
   }
 
   // Get application statistics for employee
   static async getApplicationStats(employeeId: number): Promise<ApplicationStats> {
     const pool = getDbPool();
-    
+
     const result = await pool.request()
       .input('employee_id', sql.Int, employeeId)
       .query(`
@@ -137,7 +166,7 @@ export class ApplicationService {
         FROM Applications 
         WHERE employee_id = @employee_id
       `);
-    
+
     return result.recordset[0] as ApplicationStats;
   }
 }
