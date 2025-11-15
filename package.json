@@ -1,0 +1,26 @@
+{
+  "name": "NexusBackendApi",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "@hono/prometheus": "^1.0.2",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.2.3",
+    "hono": "^4.10.6",
+    "hono-rate-limiter": "^0.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "mssql": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/mssql": "^9.1.8",
+    "@types/node": "^20.11.17",
+    "tsx": "^4.7.1",
+    "typescript": "^5.8.3"
+  }
+}
