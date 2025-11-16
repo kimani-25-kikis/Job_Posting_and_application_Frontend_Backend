@@ -93,7 +93,7 @@ export class ApplicationController {
         }, 403);
       }
 
-      const applications = await ApplicationService.getApplicationsForEmployer(user.userId);
+      const applications = await ApplicationService.getEmployerApplications(user.userId);
 
       return c.json({
         success: true,

@@ -12,6 +12,8 @@ jobRoutes.get('/jobs/:id', JobController.getJob);
 jobRoutes.post('/jobs', employerRoleAuth, JobController.createJob);
 jobRoutes.get('/employer/jobs', employerRoleAuth, JobController.getEmployerJobs);
 jobRoutes.put('/jobs/:id', employerRoleAuth, JobController.updateJob); // Add this
-jobRoutes.delete('/jobs/:id', employerRoleAuth, JobController.deleteJob); // Add this
+//jobRoutes.delete('/jobs/:id', employerRoleAuth, JobController.deleteJob); // Add this
+jobRoutes.patch('/jobs/:id/status', employerRoleAuth, JobController.toggleJobStatus); // Add this
+jobRoutes.delete('/jobs/:id', employerRoleAuth, JobController.deleteJob); // This should now do hard delete
 
 export default jobRoutes;

@@ -35,15 +35,35 @@ export class ApplicationService {
   ): Promise<Application> {
     const pool = getDbPool();
 
-    // Check if already applied
+    console.log('🔍 [ApplicationService] Checking for existing application:', {
+      jobId,
+      employeeId,
+      timestamp: new Date().toISOString()
+    });
+
+    // Check if already applied - THIS LOOKS CORRECT
     const existing = await pool.request()
       .input('job_id', sql.Int, jobId)
       .input('employee_id', sql.Int, employeeId)
       .query('SELECT id FROM Applications WHERE job_id = @job_id AND employee_id = @employee_id');
 
+    console.log('📋 [ApplicationService] Existing applications found:', existing.recordset.length);
+    
     if (existing.recordset.length > 0) {
+      console.log('🚫 [ApplicationService] Blocking duplicate application for employee:', employeeId);
       throw new Error('You have already applied for this job');
     }
+
+    // Also check if job exists and is active
+    const jobCheck = await pool.request()
+      .input('job_id', sql.Int, jobId)
+      .query('SELECT id, title, is_active FROM Jobs WHERE id = @job_id AND is_active = 1');
+
+    if (jobCheck.recordset.length === 0) {
+      throw new Error('Job not found or no longer active');
+    }
+
+    console.log('✅ [ApplicationService] Creating new application for employee:', employeeId);
 
     let query = '';
     let request = pool.request()
@@ -58,10 +78,9 @@ export class ApplicationService {
         VALUES (@job_id, @employee_id, @resume_filename, @resume_url, @file_size)
       `;
 
-      // ✅ FIX: Use the RANDOM filename for BOTH fields
       request = request
-        .input('resume_filename', sql.NVarChar, resumeData.filename) // Store random filename
-        .input('resume_url', sql.NVarChar, `/uploads/resumes/${resumeData.filename}`) // Use same random filename
+        .input('resume_filename', sql.NVarChar, resumeData.filename)
+        .input('resume_url', sql.NVarChar, `/uploads/resumes/${resumeData.filename}`)
         .input('file_size', sql.Int, resumeData.size);
     } 
     // If no resume
@@ -74,6 +93,8 @@ export class ApplicationService {
     }
 
     const result = await request.query(query);
+    console.log('🎉 [ApplicationService] Application created successfully:', result.recordset[0].id);
+    
     return result.recordset[0] as Application;
   }
 
@@ -96,21 +117,27 @@ export class ApplicationService {
   }
 
   // Get applications for employer's jobs
-  static async getApplicationsForEmployer(employerId: number): Promise<Application[]> {
+  static async getEmployerApplications(employerId: number): Promise<any[]> {
     const pool = getDbPool();
-
+    
     const result = await pool.request()
       .input('employer_id', sql.Int, employerId)
       .query(`
-        SELECT a.*, j.title as job_title, u.name as employee_name
+        SELECT 
+          a.*,
+          j.title as job_title,
+          j.employer_id,
+          e.name as employee_name,
+          emp.name as employer_name
         FROM Applications a
         JOIN Jobs j ON a.job_id = j.id
-        JOIN Users u ON a.employee_id = u.id
+        JOIN Users e ON a.employee_id = e.id
+        JOIN Users emp ON j.employer_id = emp.id
         WHERE j.employer_id = @employer_id
         ORDER BY a.applied_at DESC
       `);
 
-    return result.recordset as Application[];
+    return result.recordset;
   }
 
   // Update application status
@@ -121,6 +148,13 @@ export class ApplicationService {
     updaterType: 'employer' | 'employee'
   ): Promise<boolean> {
     const pool = getDbPool();
+
+    console.log('🔄 [ApplicationService] Updating application status:', {
+      applicationId,
+      status,
+      updaterId,
+      updaterType
+    });
 
     let query = '';
 
@@ -146,6 +180,11 @@ export class ApplicationService {
       .input('updater_id', sql.Int, updaterId)
       .query(query);
 
+    console.log('📊 [ApplicationService] Status update result:', {
+      rowsAffected: result.rowsAffected[0],
+      applicationId
+    });
+
     return result.rowsAffected[0] > 0;
   }
 
@@ -168,5 +207,49 @@ export class ApplicationService {
       `);
 
     return result.recordset[0] as ApplicationStats;
+  }
+
+  // NEW: Delete application (for employers)
+  static async deleteApplication(applicationId: number, employerId: number): Promise<boolean> {
+    const pool = getDbPool();
+
+    console.log('🗑️ [ApplicationService] Deleting application:', {
+      applicationId,
+      employerId
+    });
+
+    const result = await pool.request()
+      .input('application_id', sql.Int, applicationId)
+      .input('employer_id', sql.Int, employerId)
+      .query(`
+        DELETE FROM Applications 
+        FROM Applications a
+        JOIN Jobs j ON a.job_id = j.id
+        WHERE a.id = @application_id AND j.employer_id = @employer_id
+      `);
+
+    console.log('📊 [ApplicationService] Delete result:', {
+      rowsAffected: result.rowsAffected[0],
+      applicationId
+    });
+
+    return result.rowsAffected[0] > 0;
+  }
+
+  // NEW: Get application by ID with verification
+  static async getApplicationById(applicationId: number): Promise<any> {
+    const pool = getDbPool();
+    
+    const result = await pool.request()
+      .input('application_id', sql.Int, applicationId)
+      .query(`
+        SELECT a.*, j.employer_id, j.title as job_title, u.name as employee_name
+        FROM Applications a
+        JOIN Jobs j ON a.job_id = j.id
+        JOIN Users u ON a.employee_id = u.id
+        WHERE a.id = @application_id
+      `);
+    
+    return result.recordset.length > 0 ? result.recordset[0] : null;
   }
 }
