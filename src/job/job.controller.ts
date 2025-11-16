@@ -123,4 +123,105 @@ export class JobController {
       }, 500);
     }
   }
+
+  // Update job
+static async updateJob(c: Context) {
+  try {
+    const jobId = parseInt(c.req.param('id'));
+    const { title, description, requirements, location, salary } = await c.req.json();
+    const user = c.get('user');
+
+    if (user.userType !== 'employer') {
+      return c.json({ 
+        success: false,
+        error: 'Only employers can update jobs' 
+      }, 403);
+    }
+
+    if (isNaN(jobId)) {
+      return c.json({ 
+        success: false,
+        error: 'Invalid job ID' 
+      }, 400);
+    }
+
+    // Validate at least one field is provided
+    if (!title && !description && !requirements && !location && !salary) {
+      return c.json({ 
+        success: false,
+        error: 'At least one field must be provided for update' 
+      }, 400);
+    }
+
+    const updated = await JobService.updateJob(jobId, user.userId, {
+      title, description, requirements, location, salary
+    });
+
+    if (!updated) {
+      return c.json({ 
+        success: false,
+        error: 'Job not found or access denied' 
+      }, 404);
+    }
+
+    // Get the updated job to return
+    const updatedJob = await JobService.getJobById(jobId);
+
+    return c.json({
+      success: true,
+      message: 'Job updated successfully',
+      data: updatedJob
+    });
+
+  } catch (error: any) {
+    console.error('Update job error:', error);
+    return c.json({ 
+      success: false,
+      error: 'Failed to update job' 
+    }, 500);
+  }
+}
+
+// Delete job (soft delete)
+static async deleteJob(c: Context) {
+  try {
+    const jobId = parseInt(c.req.param('id'));
+    const user = c.get('user');
+
+    if (user.userType !== 'employer') {
+      return c.json({ 
+        success: false,
+        error: 'Only employers can delete jobs' 
+      }, 403);
+    }
+
+    if (isNaN(jobId)) {
+      return c.json({ 
+        success: false,
+        error: 'Invalid job ID' 
+      }, 400);
+    }
+
+    const deleted = await JobService.deleteJob(jobId, user.userId);
+
+    if (!deleted) {
+      return c.json({ 
+        success: false,
+        error: 'Job not found or access denied' 
+      }, 404);
+    }
+
+    return c.json({
+      success: true,
+      message: 'Job deleted successfully'
+    });
+
+  } catch (error: any) {
+    console.error('Delete job error:', error);
+    return c.json({ 
+      success: false,
+      error: 'Failed to delete job' 
+    }, 500);
+  }
+}
 }

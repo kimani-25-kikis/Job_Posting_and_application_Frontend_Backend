@@ -10,6 +10,7 @@ export interface Job {
   location: string;
   salary: string;
   created_at: string;
+  updated_at?: string;
   is_active: boolean;
   employer_name?: string;
 }
@@ -91,28 +92,54 @@ export class JobService {
     return result.recordset.length > 0 ? (result.recordset[0] as Job) : null;
   }
 
-  // Update job
+  // Update job (dynamic fields)
   static async updateJob(jobId: number, employerId: number, jobData: Partial<CreateJobData>): Promise<boolean> {
     const pool = getDbPool();
     
-    const result = await pool.request()
+    // Build dynamic update query
+    const updates: string[] = [];
+    const inputs: Record<string, string> = {};
+
+    if (jobData.title) {
+      updates.push('title = @title');
+      inputs.title = jobData.title;
+    }
+    if (jobData.description) {
+      updates.push('description = @description');
+      inputs.description = jobData.description;
+    }
+    if (jobData.requirements) {
+      updates.push('requirements = @requirements');
+      inputs.requirements = jobData.requirements;
+    }
+    if (jobData.location) {
+      updates.push('location = @location');
+      inputs.location = jobData.location;
+    }
+    if (jobData.salary) {
+      updates.push('salary = @salary');
+      inputs.salary = jobData.salary;
+    }
+
+    if (updates.length === 0) {
+      return false; // Nothing to update
+    }
+
+    let request = pool.request()
       .input('job_id', sql.Int, jobId)
-      .input('employer_id', sql.Int, employerId)
-      .input('title', sql.NVarChar, jobData.title)
-      .input('description', sql.NVarChar, jobData.description)
-      .input('requirements', sql.NVarChar, jobData.requirements)
-      .input('location', sql.NVarChar, jobData.location)
-      .input('salary', sql.NVarChar, jobData.salary)
-      .query(`
-        UPDATE Jobs 
-        SET title = COALESCE(@title, title),
-            description = COALESCE(@description, description),
-            requirements = COALESCE(@requirements, requirements),
-            location = COALESCE(@location, location),
-            salary = COALESCE(@salary, salary)
-        WHERE id = @job_id AND employer_id = @employer_id
-      `);
-    
+      .input('employer_id', sql.Int, employerId);
+
+    // Add dynamic inputs
+    Object.keys(inputs).forEach(key => {
+      request = request.input(key, sql.NVarChar, inputs[key]);
+    });
+
+    const result = await request.query(`
+      UPDATE Jobs 
+      SET ${updates.join(', ')}, updated_at = GETDATE()
+      WHERE id = @job_id AND employer_id = @employer_id
+    `);
+
     return result.rowsAffected[0] > 0;
   }
 
@@ -125,7 +152,7 @@ export class JobService {
       .input('employer_id', sql.Int, employerId)
       .query(`
         UPDATE Jobs 
-        SET is_active = 0 
+        SET is_active = 0, updated_at = GETDATE()
         WHERE id = @job_id AND employer_id = @employer_id
       `);
     
