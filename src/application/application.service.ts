@@ -1,5 +1,6 @@
 import sql from 'mssql';
 import { getDbPool } from '../db/db.config.ts';
+import { AuthService } from '../auth/auth.services.ts';
 
 export interface Application {
   id: number;
@@ -141,24 +142,72 @@ export class ApplicationService {
   }
 
   // Update application status
-  static async updateApplicationStatus(
-    applicationId: number,
-    status: Application['status'],
-    updaterId: number,
-    updaterType: 'employer' | 'employee'
-  ): Promise<boolean> {
-    const pool = getDbPool();
+ static async updateApplicationStatus(
+  applicationId: number,
+  status: Application['status'],
+  updaterId: number,
+  updaterType: 'employer' | 'employee'
+): Promise<boolean> {
+  const pool = getDbPool();
 
-    console.log('🔄 [ApplicationService] Updating application status:', {
-      applicationId,
-      status,
-      updaterId,
-      updaterType
-    });
+  console.log('🔄 [ApplicationService] Updating application status:', {
+    applicationId,
+    status,
+    updaterId,
+    updaterType
+  });
 
-    let query = '';
+  // 1. FIRST get application details WITH employee email
+  // const appDetailsResult = await pool.request()
+  //   .input('application_id', sql.Int, applicationId)
+  //   .query(`
+  //     SELECT 
+  //       a.*,
+  //       empUser.email as employee_email,
+  //       empUser.name as employee_name,
+  //       j.title as job_title,
+  //       employerUser.name as employer_name,
+  //       j.employer_id
+  //     FROM Applications a
+  //     JOIN Jobs j ON a.job_id = j.id
+  //     JOIN Users empUser ON a.employee_id = empUser.id
+  //     JOIN Users employerUser ON j.employer_id = employerUser.id
+  //     WHERE a.id = @application_id
+  //   `);
+  // 1. FIRST get application details WITH employee email
+const appDetailsResult = await pool.request()
+  .input('application_id', sql.Int, applicationId)
+  .query(`
+    SELECT 
+      a.*,
+      empUser.email as employee_email,
+      empUser.name as employee_name,
+      j.title as job_title,
+      employerUser.name as employer_name,
+      j.employer_id,
+      a.employee_id
+    FROM Applications a
+    INNER JOIN Jobs j ON a.job_id = j.id
+    INNER JOIN Users empUser ON a.employee_id = empUser.id
+    INNER JOIN Users employerUser ON j.employer_id = employerUser.id
+    WHERE a.id = @application_id
+  `);
 
-    if (updaterType === 'employer') {
+  if (appDetailsResult.recordset.length === 0) {
+    console.warn('⚠️ [ApplicationService] Application not found:', applicationId);
+    return false;
+  }
+
+  const appDetails = appDetailsResult.recordset[0];
+  
+  // 2. Security check: Verify updater has permission
+  let canUpdate = false;
+  let query = '';
+
+  if (updaterType === 'employer') {
+    // Employer can only update their own job's applications
+    if (appDetails.employer_id === updaterId) {
+      canUpdate = true;
       query = `
         UPDATE Applications 
         SET status = @status, updated_at = GETDATE()
@@ -166,27 +215,70 @@ export class ApplicationService {
         JOIN Jobs j ON a.job_id = j.id
         WHERE a.id = @application_id AND j.employer_id = @updater_id
       `;
-    } else {
+    }
+  } else {
+    // Employee can only update their own applications
+    if (appDetails.employee_id === updaterId) {
+      canUpdate = true;
       query = `
         UPDATE Applications 
         SET status = @status, updated_at = GETDATE()
         WHERE id = @application_id AND employee_id = @updater_id
       `;
     }
+  }
 
-    const result = await pool.request()
-      .input('application_id', sql.Int, applicationId)
-      .input('status', sql.NVarChar, status)
-      .input('updater_id', sql.Int, updaterId)
-      .query(query);
+  if (!canUpdate) {
+    console.error('🚫 [ApplicationService] Unauthorized status update attempt:', {
+      applicationId,
+      updaterId,
+      updaterType,
+      requiredEmployerId: appDetails.employer_id,
+      requiredEmployeeId: appDetails.employee_id
+    });
+    return false;
+  }
 
-    console.log('📊 [ApplicationService] Status update result:', {
-      rowsAffected: result.rowsAffected[0],
-      applicationId
+  // 3. Execute the update
+  const updateResult = await pool.request()
+    .input('application_id', sql.Int, applicationId)
+    .input('status', sql.NVarChar, status)
+    .input('updater_id', sql.Int, updaterId)
+    .query(query);
+
+  const updated = updateResult.rowsAffected[0] > 0;
+
+  if (updated) {
+    console.log('✅ [ApplicationService] Status updated successfully:', {
+      applicationId,
+      newStatus: status,
+      employeeEmail: appDetails.employee_email
     });
 
-    return result.rowsAffected[0] > 0;
+    // 4. Send email for important status changes (only if employer is updating)
+    if (updaterType === 'employer' && ['shortlisted', 'accepted', 'rejected'].includes(status)) {
+      try {
+    // Type assertion to fix the error
+    const emailStatus = status as 'shortlisted' | 'accepted' | 'rejected';
+    
+    await AuthService.sendStatusUpdateEmail(
+      applicationId,
+      emailStatus, // Fixed type
+      appDetails.job_title,
+      appDetails.employer_name,
+      appDetails.employee_email,
+      appDetails.employee_name
+    );
+    console.log('📧 [ApplicationService] Status email sent successfully');
+  }catch (emailError) {
+        console.error('📧 [ApplicationService] Failed to send status email:', emailError);
+        // Don't fail the update if email fails
+      }
+    }
   }
+
+  return updated;
+}
 
   // Get application statistics for employee
   static async getApplicationStats(employeeId: number): Promise<ApplicationStats> {
