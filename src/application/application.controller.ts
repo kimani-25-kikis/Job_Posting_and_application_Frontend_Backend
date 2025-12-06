@@ -4,73 +4,100 @@ import { ApplicationService } from './application.service.ts';
 export class ApplicationController {
 
   // Apply for a job (with optional resume)
-  static async applyForJob(c: Context) {
-    try {
-      const { jobId, resumeData } = await c.req.json();
-      const user = c.get('user');
+ // Apply for a job (with optional resume)
+static async applyForJob(c: Context) {
+  try {
+    // CHANGE THIS: Extract all fields from request
+    const { jobId, resumeData, applicationData } = await c.req.json();
+    const user = c.get('user');
 
-      console.log('🎯 [ApplicationController] Apply for job request:', {
-        jobId,
-        employeeId: user.userId,
-        userType: user.userType
-      });
+    console.log('🎯 [ApplicationController] Apply for job request:', {
+      jobId,
+      employeeId: user.userId,
+      userType: user.userType,
+      applicationData // ADD THIS
+    });
 
-      if (user.userType !== 'employee') {
-        console.warn('🚫 [ApplicationController] Non-employee attempted to apply for job:', user.userType);
-        return c.json({ 
-          success: false,
-          error: 'Only employees can apply for jobs' 
-        }, 403);
-      }
-
-      if (!jobId) {
-        return c.json({ 
-          success: false,
-          error: 'Job ID is required' 
-        }, 400);
-      }
-
-      const application = await ApplicationService.applyForJob(
-        jobId, 
-        user.userId, 
-        resumeData
-      );
-
-      console.log('✅ [ApplicationController] Application submitted successfully:', {
-        applicationId: application.id,
-        jobId,
-        employeeId: user.userId
-      });
-
-      return c.json({
-        success: true,
-        message: 'Application submitted successfully',
-        data: application
-      }, 201);
-
-    } catch (error: any) {
-      console.error('❌ [ApplicationController] Apply for job error:', error);
-
-      if (error.message.includes('already applied')) {
-        return c.json({ 
-          success: false,
-          error: error.message 
-        }, 409);
-      }
-
-      if (error.message.includes('Job not found')) {
-        return c.json({ 
-          success: false,
-          error: error.message 
-        }, 404);
-      }
-
+    if (user.userType !== 'employee') {
+      console.warn('🚫 [ApplicationController] Non-employee attempted to apply for job:', user.userType);
       return c.json({ 
         success: false,
-        error: 'Failed to apply for job' 
-      }, 500);
+        error: 'Only employees can apply for jobs' 
+      }, 403);
     }
+
+    if (!jobId) {
+      return c.json({ 
+        success: false,
+        error: 'Job ID is required' 
+      }, 400);
+    }
+
+    // Validate required application data fields
+    if (!applicationData) {
+      return c.json({
+        success: false,
+        error: 'Application data is required'
+      }, 400);
+    }
+
+    // Validate individual fields (optional but recommended)
+    const requiredFields = ['cover_letter', 'phone_number', 'location'];
+    const missingFields = requiredFields.filter(field => !applicationData[field]?.trim());
+    
+    if (missingFields.length > 0) {
+      return c.json({
+        success: false,
+        error: `Missing required fields: ${missingFields.join(', ')}`
+      }, 400);
+    }
+
+    // CHANGE THIS: Pass applicationData to the service
+    const application = await ApplicationService.applyForJob(
+      jobId, 
+      user.userId, 
+      resumeData,
+      applicationData // ADD THIS PARAMETER
+    );
+
+    console.log('✅ [ApplicationController] Application submitted successfully:', {
+      applicationId: application.id,
+      jobId,
+      employeeId: user.userId,
+      hasCoverLetter: !!applicationData.cover_letter,
+      hasPhone: !!applicationData.phone_number,
+      hasLocation: !!applicationData.location
+    });
+
+    return c.json({
+      success: true,
+      message: 'Application submitted successfully',
+      data: application
+    }, 201);
+
+  } catch (error: any) {
+    console.error('❌ [ApplicationController] Apply for job error:', error);
+
+    if (error.message.includes('already applied')) {
+      return c.json({ 
+        success: false,
+        error: error.message 
+      }, 409);
+    }
+
+    if (error.message.includes('Job not found')) {
+      return c.json({ 
+        success: false,
+        error: error.message 
+      }, 404);
+    }
+
+    return c.json({ 
+      success: false,
+      error: 'Failed to apply for job' 
+    }, 500);
   }
+}
 
   // Get employee applications + stats
   static async getEmployeeApplications(c: Context) {

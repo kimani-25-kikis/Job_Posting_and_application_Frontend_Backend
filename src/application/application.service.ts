@@ -29,117 +29,187 @@ export interface ApplicationStats {
 export class ApplicationService {
 
   // Apply for a job with optional resume upload
-  static async applyForJob(
-    jobId: number,
-    employeeId: number,
-    resumeData?: { filename: string; originalName: string; size: number }
-  ): Promise<Application> {
-    const pool = getDbPool();
+ // Apply for a job with optional resume upload AND application data
+static async applyForJob(
+  jobId: number,
+  employeeId: number,
+  resumeData?: { filename: string; originalName: string; size: number },
+  applicationData?: {
+    cover_letter: string;
+    phone_number: string;
+    location: string;
+  }
+): Promise<Application> {
+  const pool = getDbPool();
 
-    console.log('🔍 [ApplicationService] Checking for existing application:', {
-      jobId,
-      employeeId,
-      timestamp: new Date().toISOString()
-    });
+  console.log('🔍 [ApplicationService] Checking for existing application:', {
+    jobId,
+    employeeId,
+    applicationData: 'Provided',
+    timestamp: new Date().toISOString()
+  });
 
-    // Check if already applied - THIS LOOKS CORRECT
-    const existing = await pool.request()
-      .input('job_id', sql.Int, jobId)
-      .input('employee_id', sql.Int, employeeId)
-      .query('SELECT id FROM Applications WHERE job_id = @job_id AND employee_id = @employee_id');
+  // Check if already applied
+  const existing = await pool.request()
+    .input('job_id', sql.Int, jobId)
+    .input('employee_id', sql.Int, employeeId)
+    .query('SELECT id FROM Applications WHERE job_id = @job_id AND employee_id = @employee_id');
 
-    console.log('📋 [ApplicationService] Existing applications found:', existing.recordset.length);
+  console.log('📋 [ApplicationService] Existing applications found:', existing.recordset.length);
+  
+  if (existing.recordset.length > 0) {
+    console.log('🚫 [ApplicationService] Blocking duplicate application for employee:', employeeId);
+    throw new Error('You have already applied for this job');
+  }
+
+  // Also check if job exists and is active
+  const jobCheck = await pool.request()
+    .input('job_id', sql.Int, jobId)
+    .query('SELECT id, title, is_active FROM Jobs WHERE id = @job_id AND is_active = 1');
+
+  if (jobCheck.recordset.length === 0) {
+    throw new Error('Job not found or no longer active');
+  }
+
+  console.log('✅ [ApplicationService] Creating new application for employee:', employeeId);
+
+  // FIXED: Build query based on available data
+  let columns = ['job_id', 'employee_id'];
+  let values = ['@job_id', '@employee_id'];
+  let request = pool.request()
+    .input('job_id', sql.Int, jobId)
+    .input('employee_id', sql.Int, employeeId);
+
+  // Add application data columns if provided
+  if (applicationData) {
+    columns.push('cover_letter', 'phone_number', 'location');
+    values.push('@cover_letter', '@phone_number', '@location');
     
-    if (existing.recordset.length > 0) {
-      console.log('🚫 [ApplicationService] Blocking duplicate application for employee:', employeeId);
-      throw new Error('You have already applied for this job');
-    }
+    request = request
+      .input('cover_letter', sql.NVarChar(sql.MAX), applicationData.cover_letter || '')
+      .input('phone_number', sql.NVarChar(50), applicationData.phone_number || '')
+      .input('location', sql.NVarChar(255), applicationData.location || '');
+  }
 
-    // Also check if job exists and is active
-    const jobCheck = await pool.request()
-      .input('job_id', sql.Int, jobId)
-      .query('SELECT id, title, is_active FROM Jobs WHERE id = @job_id AND is_active = 1');
+  // Add resume data columns if provided
+  if (resumeData) {
+    columns.push('resume_filename', 'resume_url', 'file_size');
+    values.push('@resume_filename', '@resume_url', '@file_size');
+    
+    request = request
+      .input('resume_filename', sql.NVarChar(255), resumeData.filename)
+      .input('resume_url', sql.NVarChar(sql.MAX), `/uploads/resumes/${resumeData.filename}`)
+      .input('file_size', sql.Int, resumeData.size);
+  }
 
-    if (jobCheck.recordset.length === 0) {
-      throw new Error('Job not found or no longer active');
-    }
+  // Build the final query - FIXED SYNTAX
+  const query = `
+    INSERT INTO Applications (${columns.join(', ')})
+    OUTPUT INSERTED.*
+    VALUES (${values.join(', ')})
+  `;
 
-    console.log('✅ [ApplicationService] Creating new application for employee:', employeeId);
+  console.log('📝 [ApplicationService] Final query:', query);
+  console.log('🔍 [ApplicationService] Parameters:', {
+    job_id: jobId,
+    employee_id: employeeId,
+    cover_letter: applicationData?.cover_letter?.substring(0, 50) + '...',
+    phone_number: applicationData?.phone_number,
+    location: applicationData?.location,
+    has_resume: !!resumeData
+  });
 
-    let query = '';
-    let request = pool.request()
-      .input('job_id', sql.Int, jobId)
-      .input('employee_id', sql.Int, employeeId);
-
-    // If resume uploaded
-    if (resumeData) {
-      query = `
-        INSERT INTO Applications (job_id, employee_id, resume_filename, resume_url, file_size) 
-        OUTPUT INSERTED.*
-        VALUES (@job_id, @employee_id, @resume_filename, @resume_url, @file_size)
-      `;
-
-      request = request
-        .input('resume_filename', sql.NVarChar, resumeData.filename)
-        .input('resume_url', sql.NVarChar, `/uploads/resumes/${resumeData.filename}`)
-        .input('file_size', sql.Int, resumeData.size);
-    } 
-    // If no resume
-    else {
-      query = `
-        INSERT INTO Applications (job_id, employee_id) 
-        OUTPUT INSERTED.*
-        VALUES (@job_id, @employee_id)
-      `;
-    }
-
+  try {
     const result = await request.query(query);
     console.log('🎉 [ApplicationService] Application created successfully:', result.recordset[0].id);
     
     return result.recordset[0] as Application;
+  } catch (error: any) {
+    console.error('❌ [ApplicationService] Database error:', {
+      message: error.message,
+      number: error.number,
+      state: error.state,
+      lineNumber: error.lineNumber,
+      query: query // This will show us the exact query that failed
+    });
+    throw error;
   }
+}
 
   // Get applications by employee
-  static async getApplicationsByEmployee(employeeId: number): Promise<Application[]> {
-    const pool = getDbPool();
+  // Get applications by employee
+static async getApplicationsByEmployee(employeeId: number): Promise<Application[]> {
+  const pool = getDbPool();
 
-    const result = await pool.request()
-      .input('employee_id', sql.Int, employeeId)
-      .query(`
-        SELECT a.*, j.title as job_title, u.name as employer_name
-        FROM Applications a
-        JOIN Jobs j ON a.job_id = j.id
-        JOIN Users u ON j.employer_id = u.id
-        WHERE a.employee_id = @employee_id
-        ORDER BY a.applied_at DESC
-      `);
+  const result = await pool.request()
+    .input('employee_id', sql.Int, employeeId)
+    .query(`
+      SELECT 
+        a.*, 
+        j.title as job_title, 
+        u.name as employer_name,
+        a.cover_letter,
+        a.phone_number,
+        a.location
+        -- REMOVE: a.full_name, a.email (these columns don't exist)
+      FROM Applications a
+      JOIN Jobs j ON a.job_id = j.id
+      JOIN Users u ON j.employer_id = u.id
+      WHERE a.employee_id = @employee_id
+      ORDER BY a.applied_at DESC
+    `);
 
-    return result.recordset as Application[];
-  }
+  return result.recordset as Application[];
+}
 
   // Get applications for employer's jobs
-  static async getEmployerApplications(employerId: number): Promise<any[]> {
-    const pool = getDbPool();
-    
-    const result = await pool.request()
-      .input('employer_id', sql.Int, employerId)
-      .query(`
-        SELECT 
-          a.*,
-          j.title as job_title,
-          j.employer_id,
-          e.name as employee_name,
-          emp.name as employer_name
-        FROM Applications a
-        JOIN Jobs j ON a.job_id = j.id
-        JOIN Users e ON a.employee_id = e.id
-        JOIN Users emp ON j.employer_id = emp.id
-        WHERE j.employer_id = @employer_id
-        ORDER BY a.applied_at DESC
-      `);
+ // Get applications for employer's jobs
+static async getEmployerApplications(employerId: number): Promise<any[]> {
+  const pool = getDbPool();
+  
+  console.log('🔍 [ApplicationService] Fetching applications for employer:', employerId);
+  
+  // FIXED QUERY - Use DISTINCT or fix JOINs to avoid duplicates
+  const result = await pool.request()
+    .input('employer_id', sql.Int, employerId)
+    .query(`
+      SELECT DISTINCT
+        a.id,
+        a.job_id,
+        a.employee_id,
+        a.status,
+        a.applied_at,
+        a.updated_at,
+        a.resume_filename,
+        a.resume_url,
+        a.file_size,
+        a.cover_letter,
+        a.phone_number,
+        a.location,
+        j.title as job_title,
+        j.employer_id,
+        e.name as employee_name,
+        emp.name as employer_name
+      FROM Applications a
+      INNER JOIN Jobs j ON a.job_id = j.id
+      INNER JOIN Users e ON a.employee_id = e.id
+      INNER JOIN Users emp ON j.employer_id = emp.id
+      WHERE j.employer_id = @employer_id
+      ORDER BY a.applied_at DESC
+    `);
 
-    return result.recordset;
-  }
+  console.log('📊 [ApplicationService] Query result:', {
+    rowCount: result.recordset.length,
+    firstRow: result.recordset.length > 0 ? {
+      id: result.recordset[0].id,
+      phone_number: result.recordset[0].phone_number,
+      location: result.recordset[0].location,
+      resume_url: result.recordset[0].resume_url
+    } : 'No rows'
+  });
+
+  return result.recordset;
+}
 
   // Update application status
  static async updateApplicationStatus(
